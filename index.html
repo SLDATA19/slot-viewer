@@ -58,21 +58,10 @@
 
 <!-- 画面1: トークン入力のみ（保存済みなら自動でスキップして一覧へ） -->
 <section id="screen-token">
-  <header style="padding:14px 0 8px">
-    <h1>差枚ビューア</h1>
-    <div class="sub">大一プラザみずほ台・ジャグラー差枚</div>
-  </header>
-  <div class="card">
-    <label>読み取り専用トークン（fine-grained・Contents: Readのみ）</label>
+  <div class="card" style="margin-top:14px">
     <input type="password" id="tokenInput" placeholder="github_pat_…" autocomplete="off">
     <button class="primary" id="loadBtn">読み込む</button>
-    <div class="row" style="margin-top:8px">
-      <button class="ghost" id="clearBtn">トークンを消す</button>
-    </div>
     <p class="muted" id="tokenStatus"></p>
-    <p class="muted">非公開リポジトリ sldata19/slot-data の machines.txt と各機種の通算CSVを読みます。
-    トークンはこの端末内にだけ保存されます。デモ表示はありません。
-    ※ アップロード用のトークン（書き込み可）はここには貼らないこと。</p>
   </div>
 </section>
 
@@ -143,10 +132,6 @@
     <div id="list"></div>
   </div>
 </section>
-
-<footer>
-  差枚はSVG読み取り値（誤差約±3〜±17枚）。+9枚の補正は未適用（2日目の照合待ちで保留中）。
-</footer>
 
 <script src="app.js"></script>
 </body>

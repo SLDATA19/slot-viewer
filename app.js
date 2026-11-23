@@ -441,12 +441,6 @@ function init() {
     if (!t) { setTokenStatus("トークンを貼ってください。"); return; }
     loadAll(t);
   });
-  $("clearBtn").addEventListener("click", function () {
-    try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
-    state.token = null;
-    $("tokenInput").value = "";
-    setTokenStatus("トークンを消しました。");
-  });
   $("changeTokenBtn").addEventListener("click", function () { showScreen("token"); });
 
   // 保存済みトークンがあれば自動で読み込み、一覧へ（無ければトークン画面のまま）
