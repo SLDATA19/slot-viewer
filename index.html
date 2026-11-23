@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#121212">
+<title>マイジャグ差枚ビューア</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #121212; color: #e8e8e8;
+         font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+  header { padding: 14px 16px 8px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { font-size: 12px; color: #9a9a9a; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+           background: #3a2f00; color: #ffd75e; margin-left: 6px; vertical-align: 2px; }
+  .badge.live { background: #0c3a1e; color: #7fe0a8; }
+  section { padding: 8px 16px; }
+  .card { background: #1e1e1e; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+  .hero-num { font-size: 34px; font-weight: 700; line-height: 1.1; }
+  .hero-num .unit { font-size: 16px; font-weight: 400; }
+  .pos { color: #ff7a7a; } .neg { color: #7fb8ff; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip, .seg { border: 1px solid #444; background: #262626; color: #e8e8e8;
+                border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .chip.on, .seg.on { background: #ffd75e; color: #222; border-color: #ffd75e; font-weight: 700; }
+  .seg { border-radius: 8px; }
+  label { font-size: 12px; color: #9a9a9a; display: block; margin: 10px 0 4px; }
+  input[type="date"], input[type="text"], input[type="password"] {
+    width: 100%; background: #262626; border: 1px solid #444; color: #e8e8e8;
+    border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+  button.primary { width: 100%; margin-top: 10px; padding: 10px; font-size: 14px;
+    border: none; border-radius: 8px; background: #ffd75e; color: #222; font-weight: 700; cursor: pointer; }
+  button.ghost { background: none; border: 1px solid #555; color: #ccc; border-radius: 8px;
+    padding: 6px 10px; font-size: 12px; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 12px; color: #9a9a9a; padding: 6px 4px;
+       border-bottom: 1px solid #333; }
+  td { padding: 8px 4px; border-bottom: 1px solid #2a2a2a; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.tap { cursor: pointer; }
+  tr.tap:active { background: #2a2a2a; }
+  .rank1 td { font-weight: 700; }
+  .muted { color: #9a9a9a; font-size: 12px; }
+  .detail-head { display: flex; justify-content: space-between; align-items: center; }
+  details { font-size: 13px; color: #bdbdbd; }
+  details summary { cursor: pointer; color: #9a9a9a; }
+  footer { padding: 4px 16px 24px; font-size: 11px; color: #777; }
+</style>
+</head>
+<body>
+<header>
+  <h1>マイジャグ差枚ビューア<span id="srcBadge" class="badge">デモデータ</span></h1>
+  <div class="sub" id="dataInfo">読み込み中…</div>
+</header>
+
+<section>
+  <div class="card">
+    <div class="muted">期間No.1</div>
+    <div id="hero" class="hero-num">—</div>
+    <div id="heroSub" class="muted"></div>
+  </div>
+
+  <div class="card">
+    <label>期間（基準日 = データの最新日）</label>
+    <div class="row" id="periodRow">
+      <button class="seg" data-period="today">今日</button>
+      <button class="seg" data-period="yesterday">昨日</button>
+      <button class="seg" data-period="7d">直近7日</button>
+      <button class="seg" data-period="30d">直近30日</button>
+      <button class="seg on" data-period="all">全期間</button>
+      <button class="seg" data-period="custom">任意</button>
+    </div>
+    <div id="customRow" style="display:none">
+      <label>開始日</label><input type="date" id="fromDate">
+      <label>終了日</label><input type="date" id="toDate">
+    </div>
+
+    <label>ランキングの見方</label>
+    <div class="row">
+      <button class="seg on" data-mode="total">期間合計</button>
+      <button class="seg" data-mode="single">単日記録</button>
+    </div>
+
+    <label>日付の末尾（特日チェック・複数可）</label>
+    <div class="row" id="digitRow"></div>
+
+    <label>機種</label>
+    <div class="row" id="machineRow"><button class="seg on" data-machine="all">全部</button></div>
+  </div>
+
+  <div class="card">
+    <div class="detail-head">
+      <strong id="listTitle">期間合計 Top10</strong>
+      <button class="ghost" id="backBtn" style="display:none">← 一覧に戻る</button>
+    </div>
+    <div id="list"></div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>データの読み込み設定（GitHub連携）</summary>
+      <p class="muted">非公開リポジトリ sldata19/slot-data の通算CSV
+      <code>myjugglerV_sabai_all.csv</code> を読みます。読み取り専用のトークンを1回貼ると、
+      以後は端末内に保存されて自動で最新データを取得します。</p>
+      <label>読み取り専用トークン（fine-grained・Contents: Readのみ）</label>
+      <input type="password" id="tokenInput" placeholder="github_pat_…" autocomplete="off">
+      <button class="primary" id="loadBtn">GitHubから読み込む</button>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" id="clearBtn">トークンを消す</button>
+        <button class="ghost" id="demoBtn">デモデータに戻す</button>
+      </div>
+      <p class="muted" id="loadStatus"></p>
+      <p class="muted">※ アップロード用のトークン（書き込み可）はここには貼らないこと。
+      別途、読み取り専用のトークンを作ってください。作り方は README 参照。</p>
+    </details>
+  </div>
+</section>
+
+<footer>
+  差枚はSVG読み取り値（誤差約±3〜±17枚）。+9枚の補正は未適用（2日目の照合待ちで保留中）。
+  ランキング用途では9枚以内の差しか順位に影響しません。
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
