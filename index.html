@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#121212">
-<title>マイジャグ差枚ビューア</title>
+<title>差枚ビューア</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <style>
@@ -15,9 +15,6 @@
   header { padding: 14px 16px 8px; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   .sub { font-size: 12px; color: #9a9a9a; }
-  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
-           background: #3a2f00; color: #ffd75e; margin-left: 6px; vertical-align: 2px; }
-  .badge.live { background: #0c3a1e; color: #7fe0a8; }
   section { padding: 8px 16px; }
   .card { background: #1e1e1e; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
   .hero-num { font-size: 34px; font-weight: 700; line-height: 1.1; }
@@ -46,18 +43,58 @@
   .rank1 td { font-weight: 700; }
   .muted { color: #9a9a9a; font-size: 12px; }
   .detail-head { display: flex; justify-content: space-between; align-items: center; }
-  details { font-size: 13px; color: #bdbdbd; }
-  details summary { cursor: pointer; color: #9a9a9a; }
+  .machine-card { background: #1e1e1e; border-radius: 12px; padding: 14px; margin-bottom: 12px;
+    cursor: pointer; border: 1px solid #2a2a2a; }
+  .machine-card:active { background: #2a2a2a; }
+  .mc-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .mc-head strong { font-size: 16px; }
+  .pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px;
+    border-radius: 999px; background: #0c3a1e; color: #7fe0a8; vertical-align: 1px; }
+  .tabrow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
   footer { padding: 4px 16px 24px; font-size: 11px; color: #777; }
 </style>
 </head>
 <body>
-<header>
-  <h1>マイジャグ差枚ビューア<span id="srcBadge" class="badge">デモデータ</span></h1>
-  <div class="sub" id="dataInfo">読み込み中…</div>
-</header>
 
-<section>
+<!-- 画面1: トークン入力のみ（保存済みなら自動でスキップして一覧へ） -->
+<section id="screen-token">
+  <header style="padding:14px 0 8px">
+    <h1>差枚ビューア</h1>
+    <div class="sub">大一プラザみずほ台・ジャグラー差枚</div>
+  </header>
+  <div class="card">
+    <label>読み取り専用トークン（fine-grained・Contents: Readのみ）</label>
+    <input type="password" id="tokenInput" placeholder="github_pat_…" autocomplete="off">
+    <button class="primary" id="loadBtn">読み込む</button>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost" id="clearBtn">トークンを消す</button>
+    </div>
+    <p class="muted" id="tokenStatus"></p>
+    <p class="muted">非公開リポジトリ sldata19/slot-data の machines.txt と各機種の通算CSVを読みます。
+    トークンはこの端末内にだけ保存されます。デモ表示はありません。
+    ※ アップロード用のトークン（書き込み可）はここには貼らないこと。</p>
+  </div>
+</section>
+
+<!-- 画面2: 機種一覧 -->
+<section id="screen-list" style="display:none">
+  <header style="padding:14px 0 8px">
+    <h1>機種一覧</h1>
+    <div class="sub" id="listInfo"></div>
+  </header>
+  <div class="card" id="crossBanner"></div>
+  <div id="machineList"></div>
+  <button class="ghost" id="changeTokenBtn">トークンを変更する</button>
+</section>
+
+<!-- 画面3: 機種ページ -->
+<section id="screen-machine" style="display:none">
+  <header style="padding:14px 0 8px">
+    <h1 id="machineTitle">機種</h1>
+    <div class="sub">タブで機種を切り替えられます</div>
+  </header>
+  <div class="tabrow" id="machineTabs"></div>
+
   <div class="card">
     <div class="muted">期間No.1</div>
     <div id="hero" class="hero-num">—</div>
@@ -85,44 +122,30 @@
       <button class="seg" data-mode="single">単日記録</button>
     </div>
 
+    <label>並べ替え・絞り込み</label>
+    <div class="row">
+      <button class="seg" id="sortBtn">出てる順 ▼</button>
+      <button class="chip" id="plusZeroChip">プラス日ゼロのみ</button>
+    </div>
+
     <label>日付の末尾（特日チェック・複数可）</label>
     <div class="row" id="digitRow"></div>
-
-    <label>機種</label>
-    <div class="row" id="machineRow"><button class="seg on" data-machine="all">全部</button></div>
   </div>
 
   <div class="card">
     <div class="detail-head">
-      <strong id="listTitle">期間合計 Top10</strong>
-      <button class="ghost" id="backBtn" style="display:none">← 一覧に戻る</button>
+      <strong id="listTitle">期間合計（全台）</strong>
+      <span>
+        <button class="ghost" id="backBtn" style="display:none">← 一覧に戻る</button>
+        <button class="ghost" id="toListBtn">機種一覧へ</button>
+      </span>
     </div>
     <div id="list"></div>
-  </div>
-
-  <div class="card">
-    <details>
-      <summary>データの読み込み設定（GitHub連携）</summary>
-      <p class="muted">非公開リポジトリ sldata19/slot-data の通算CSV
-      <code>myjugglerV_sabai_all.csv</code> を読みます。読み取り専用のトークンを1回貼ると、
-      以後は端末内に保存されて自動で最新データを取得します。</p>
-      <label>読み取り専用トークン（fine-grained・Contents: Readのみ）</label>
-      <input type="password" id="tokenInput" placeholder="github_pat_…" autocomplete="off">
-      <button class="primary" id="loadBtn">GitHubから読み込む</button>
-      <div class="row" style="margin-top:8px">
-        <button class="ghost" id="clearBtn">トークンを消す</button>
-        <button class="ghost" id="demoBtn">デモデータに戻す</button>
-      </div>
-      <p class="muted" id="loadStatus"></p>
-      <p class="muted">※ アップロード用のトークン（書き込み可）はここには貼らないこと。
-      別途、読み取り専用のトークンを作ってください。作り方は README 参照。</p>
-    </details>
   </div>
 </section>
 
 <footer>
   差枚はSVG読み取り値（誤差約±3〜±17枚）。+9枚の補正は未適用（2日目の照合待ちで保留中）。
-  ランキング用途では9枚以内の差しか順位に影響しません。
 </footer>
 
 <script src="app.js"></script>
