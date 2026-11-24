@@ -1,6 +1,6 @@
 /* 差枚ビューア用サービスワーカー v2: アプリ本体だけキャッシュし、
  * GitHub APIへの問い合わせは毎回ネットワークへ行く（データの鮮度優先）。 */
-var CACHE = "slot-viewer-v4";
+var CACHE = "slot-viewer-v6";
 var SHELL = ["./", "index.html", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", function (e) {

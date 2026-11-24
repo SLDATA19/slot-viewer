@@ -1,12 +1,15 @@
-/* 差枚ビューア v2
- * 3画面構成（承認済み設計 2026-11-23）:
+/* 差枚ビューア v2.1
+ * 4画面構成（承認済み設計 2026-11-23、v2.1追加 2026-11-25）:
  *   1. トークン入力のみ（保存済みなら自動スキップ）。デモは廃止。
  *   2. 機種一覧: 横断No.1バナー + 機種カード（最新日のNo.1と機種合計付き）
  *   3. 機種ページ: 従来UI + 機種切替タブ + 全件表示 + 並べ替え切替
  *      + プラス日ゼロの強調・絞り込み + 期間内最大単日の併記
+ *   4. 日別詳細（v2.1）: 履歴・単日記録の行タップで、その日の
+ *      BB/RB/確率/総回転数などを表示（差枚だけでは設定推測ができないため）
  * データ源: 非公開リポジトリ sldata19/slot-data
  *   machines.txt（ID,表示名,一覧URL。空行・#行は無視）が機種一覧を決める。
  *   各機種の通算CSV <ID>_sabai_all.csv（ヘッダ: 取得日,台番号,推定差枚,備考）
+ *   詳細用に <ID>_all.csv（一覧の通算）と <ID>_detail_all.csv（回収分）も読む。
  * 機種の増減・並び順は machines.txt の行順だけが決める。ビューア側に
  * 機種の設定を持たない（PC側で1行増やすだけで一覧に自動で増える）。
  */
@@ -19,6 +22,8 @@ var state = {
   token: null,
   machines: [],        // [{ id, name }]
   data: {},            // id -> rows [{ d, m, v }]
+  details: {},         // id -> { "日付|台番号": 詳細オブジェクト }
+  dayDetail: null,     // 日別詳細の対象 { m, d }
   screen: "token",     // token | list | machine
   currentId: null,
   period: "all",
@@ -34,9 +39,13 @@ function $(id) { return document.getElementById(id); }
 function fmt(n) { return (n > 0 ? "+" : "") + n.toLocaleString("ja-JP"); }
 function dayOf(dateStr) { return parseInt(dateStr.slice(8, 10), 10); }
 function addDays(dateStr, n) {
-  var t = new Date(dateStr + "T00:00:00+09:00");
-  t.setDate(t.getDate() + n);
-  return t.toISOString().slice(0, 10);
+  // UTC部品だけで計算する。toISOString() はUTC換算のため、JST深夜0時を
+  // 基準にすると日付が前日にずれる（「昨日」が一昨日になるバグの原因）。
+  var p = dateStr.split("-").map(Number);
+  var t = new Date(Date.UTC(p[0], p[1] - 1, p[2] + n));
+  return t.getUTCFullYear() + "-" +
+    String(t.getUTCMonth() + 1).padStart(2, "0") + "-" +
+    String(t.getUTCDate()).padStart(2, "0");
 }
 function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -76,6 +85,79 @@ function parseSabaiCsv(text) {
   return out;
 }
 
+/* ---- 詳細CSV解析（一覧の通算 / 回収detailの通算） ----
+ * どちらも「日付|台番号」をキーにしたマップを返す。値は表示用に
+ * 文字列のまま持つ（確率はサイト側で整形済みの "1/260.3" 形式）。 */
+function csvTable(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  var lines = text.split(/\r?\n/).filter(function (l) { return l.trim() !== ""; });
+  if (lines.length < 2) return { head: [], rows: [] };
+  return {
+    head: lines[0].split(",").map(function (h) { return h.trim(); }),
+    rows: lines.slice(1).map(function (l) { return l.split(","); })
+  };
+}
+
+function detailFromRow(head, c, hasListCols) {
+  function col(name) {
+    var i = head.indexOf(name);
+    return i < 0 ? "" : (c[i] || "").trim();
+  }
+  var o = {
+    status: hasListCols ? col("状態") : "",
+    bb: col("BB"), rb: col("RB"), art: col("ART"),
+    start: hasListCols ? col("スタート") : "",
+    total: col("総回転数"),
+    pbb: col("BB確率"), prb: col("RB確率"), pall: col("合成確率"),
+    prev: hasListCols ? col("前日最終スタート") : "",
+    maxh: col("最大持玉")
+  };
+  return o;
+}
+
+function parseListCsv(text) {
+  var t = csvTable(text);
+  var iDate = t.head.indexOf("取得日"), iMach = t.head.indexOf("台番号");
+  var out = {};
+  if (iDate < 0 || iMach < 0) return out;
+  t.rows.forEach(function (c) {
+    var d = (c[iDate] || "").trim(), m = (c[iMach] || "").trim();
+    if (d && m) out[d + "|" + m] = detailFromRow(t.head, c, true);
+  });
+  return out;
+}
+
+function parseDetailCsv(text) {
+  var t = csvTable(text);
+  var iDate = t.head.indexOf("取得日"), iMach = t.head.indexOf("台番号");
+  var out = {};
+  if (iDate < 0 || iMach < 0) return out;
+  t.rows.forEach(function (c) {
+    var d = (c[iDate] || "").trim(), m = (c[iMach] || "").trim();
+    if (d && m) out[d + "|" + m] = detailFromRow(t.head, c, false);
+  });
+  return out;
+}
+
+/* 一覧と回収detailのマージ。共有項目（BB/RB/ART/総回転数/確率/最大持玉）は
+ * 回収detail側を優先する（回収は検証済みの値で、2026-11-17 のような
+ * ラベル不整合のある日でも回収側が正しいため）。状態・スタート・
+ * 前日最終スタートは一覧にしか無いので一覧から取る。 */
+function mergeDetails(listMap, detailMap) {
+  var out = {};
+  Object.keys(listMap || {}).forEach(function (k) { out[k] = listMap[k]; });
+  Object.keys(detailMap || {}).forEach(function (k) {
+    var d = detailMap[k], base = out[k] || {
+      status: "", start: "", prev: ""
+    };
+    ["bb", "rb", "art", "total", "pbb", "prb", "pall", "maxh"].forEach(function (f) {
+      if (d[f] !== "" && d[f] != null) base[f] = d[f];
+    });
+    out[k] = base;
+  });
+  return out;
+}
+
 /* ---- GitHub連携: Contents APIで1ファイルをテキストで読む（base64） ---- */
 function fetchRepoText(token, path) {
   return fetch(REPO_CONTENTS + path, {
@@ -106,6 +188,7 @@ function loadAll(token) {
     if (!machines.length) throw new Error("machines.txt に機種がありません");
     state.machines = machines;
     state.data = {};
+    state.details = {};
     var chain = Promise.resolve();
     var failed = [];
     machines.forEach(function (mc) {
@@ -115,6 +198,18 @@ function loadAll(token) {
         }).catch(function (err) {
           failed.push(mc.id + ": " + err.message);
           state.data[mc.id] = [];
+        }).then(function () {
+          // 詳細用の一覧CSVと回収detailは任意（無ければ詳細が一部空になるだけ）
+          var listMap = null, detailMap = null;
+          return fetchRepoText(token, mc.id + "_all.csv").then(function (csv) {
+            listMap = parseListCsv(csv);
+          }).catch(function () {}).then(function () {
+            return fetchRepoText(token, mc.id + "_detail_all.csv").then(function (csv) {
+              detailMap = parseDetailCsv(csv);
+            }).catch(function () {});
+          }).then(function () {
+            state.details[mc.id] = mergeDetails(listMap, detailMap);
+          });
         });
       });
     });
@@ -217,7 +312,7 @@ function crossNo1(machines, data) {
 /* ---- 画面切替 ---- */
 function showScreen(name) {
   state.screen = name;
-  ["token", "list", "machine"].forEach(function (s) {
+  ["token", "list", "machine", "day"].forEach(function (s) {
     var el = $("screen-" + s);
     if (el) el.style.display = (s === name) ? "" : "none";
   });
@@ -309,10 +404,17 @@ function renderMachine() {
     if (!mine.length) { list.innerHTML = '<p class="muted">この期間のデータがありません。</p>'; return; }
     var html = '<table><tr><th>日付</th><th class="num">差枚</th></tr>';
     mine.forEach(function (r) {
-      html += '<tr><td>' + r.d + '（' + (dayOf(r.d) % 10) + 'のつく日）</td>' +
+      var dig = dayOf(r.d) % 10;
+      var tag = (dig === 1 || dig === 5 || dig === 6) ? '（' + dig + 'のつく日）' : "";
+      html += '<tr class="tap tapday" data-m="' + r.m + '" data-d="' + r.d + '"><td>' + r.d + tag + '</td>' +
         '<td class="num ' + (r.v >= 0 ? "pos" : "neg") + '">' + fmt(r.v) + '</td></tr>';
     });
-    list.innerHTML = html + "</table>";
+    list.innerHTML = html + "</table><p class='muted'>行をタップするとその日の詳細を表示します。</p>";
+    list.querySelectorAll("tr.tapday").forEach(function (tr) {
+      tr.addEventListener("click", function () {
+        openDay(tr.getAttribute("data-m"), tr.getAttribute("data-d"));
+      });
+    });
     return;
   }
 
@@ -346,12 +448,14 @@ function renderMachine() {
         (g.plus === 0 ? ' <span class="pill">プラスなし</span>' : "") + '</td>' +
         '<td class="num ' + (g.sum >= 0 ? "pos" : "neg") + '">' + fmt(g.sum) + '</td>' +
         '<td class="num">' + fmt(Math.round(g.sum / g.days)) + '</td>' +
-        '<td class="num">' + g.plus + '/' + g.days + '</td>' +
+        '<td class="num">' + g.plus + '/' + g.days + '<br><span class="muted">' +
+          (g.days ? Math.round(g.plus / g.days * 100) : 0) + '%</span></td>' +
         '<td class="num ' + (g.maxDay >= 0 ? "pos" : "neg") + '">' + fmt(g.maxDay) + '</td></tr>';
     });
     list.innerHTML = h + "</table><p class='muted'>行をタップするとその台の日別履歴を表示します。</p>";
   } else {
-    var s = sortSingles(rows);
+    var allS = sortSingles(rows);
+    var s = allS.slice(0, 100); // 単日記録は全期間だと際限なく長くなるため上限100件
     var top1 = s[0];
     hero.innerHTML = '<span class="' + (top1.v >= 0 ? "pos" : "neg") + '">' + fmt(top1.v) +
       '<span class="unit">枚</span></span>';
@@ -359,19 +463,62 @@ function renderMachine() {
     title.textContent = "単日記録（全台）";
     var h2 = '<table><tr><th>#</th><th>台</th><th>日付</th><th class="num">差枚</th></tr>';
     s.forEach(function (r, i) {
-      h2 += '<tr class="tap' + (i === 0 ? " rank1" : "") + '" data-m="' + r.m + '">' +
+      h2 += '<tr class="tap' + (i === 0 ? " rank1" : "") + '" data-m="' + r.m + '" data-d="' + r.d + '">' +
         '<td>' + (i + 1) + '</td><td>' + r.m + '番</td><td>' + r.d + '</td>' +
         '<td class="num ' + (r.v >= 0 ? "pos" : "neg") + '">' + fmt(r.v) + '</td></tr>';
     });
-    list.innerHTML = h2 + "</table><p class='muted'>行をタップするとその台の日別履歴を表示します。</p>";
+    list.innerHTML = h2 + "</table>" +
+      (allS.length > 100 ? "<p class='muted'>全" + allS.length + "件中100件を表示しています。</p>" : "") +
+      "<p class='muted'>行をタップするとその日の詳細を表示します。</p>";
   }
 
   list.querySelectorAll("tr.tap").forEach(function (tr) {
     tr.addEventListener("click", function () {
+      var d = tr.getAttribute("data-d");
+      if (d) { openDay(tr.getAttribute("data-m"), d); return; }
       state.detailMachine = tr.getAttribute("data-m");
       renderMachine();
     });
   });
+}
+
+/* ---- 日別詳細 ---- */
+function openDay(m, d) {
+  state.dayDetail = { m: m, d: d };
+  renderDay();
+  showScreen("day");
+}
+
+function renderDay() {
+  var dd = state.dayDetail;
+  if (!dd) return;
+  var mc = state.machines.filter(function (x) { return x.id === state.currentId; })[0];
+  $("dayTitle").textContent = dd.m + "番・" + dd.d;
+  $("daySub").textContent = mc ? mc.name : "";
+  var row = currentRows().filter(function (r) { return r.m === dd.m && r.d === dd.d; })[0];
+  var det = (state.details[state.currentId] || {})[dd.d + "|" + dd.m] || null;
+  function line(label, val, cls) {
+    return '<tr><th style="width:40%">' + label + '</th>' +
+      '<td class="num ' + (cls || "") + '">' + (val === "" || val == null ? "—" : esc(val)) + '</td></tr>';
+  }
+  var h = "<table>";
+  if (row) h += line("差枚", fmt(row.v), row.v >= 0 ? "pos" : "neg");
+  if (det) {
+    h += line("状態", det.status);
+    h += line("BB", det.bb);
+    h += line("RB", det.rb);
+    h += line("ART", det.art);
+    h += line("スタート", det.start);
+    h += line("総回転数", det.total);
+    h += line("BB確率", det.pbb);
+    h += line("RB確率", det.prb);
+    h += line("合成確率", det.pall);
+    h += line("前日最終スタート", det.prev);
+    h += line("最大持玉", det.maxh);
+  }
+  h += "</table>";
+  if (!det) h += '<p class="muted">この日のBB/RB等のデータはありません（差枚のみ）。</p>';
+  $("dayBody").innerHTML = h;
 }
 
 function refreshMachineDate() {
@@ -424,6 +571,7 @@ function init() {
   $("fromDate").addEventListener("change", renderMachine);
   $("toDate").addEventListener("change", renderMachine);
   $("backBtn").addEventListener("click", function () { state.detailMachine = null; renderMachine(); });
+  $("dayBackBtn").addEventListener("click", function () { showScreen("machine"); });
   $("toListBtn").addEventListener("click", function () { showScreen("list"); renderList(); });
   $("sortBtn").addEventListener("click", function () {
     state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
@@ -461,6 +609,9 @@ if (typeof module !== "undefined") {
   module.exports = {
     parseSabaiCsv: parseSabaiCsv,
     parseMachinesTxt: parseMachinesTxt,
+    parseListCsv: parseListCsv,
+    parseDetailCsv: parseDetailCsv,
+    mergeDetails: mergeDetails,
     totals: totals,
     summarizeDay: summarizeDay,
     sortTotals: sortTotals,

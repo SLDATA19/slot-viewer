@@ -93,8 +93,8 @@
   <div class="card">
     <label>期間（基準日 = データの最新日）</label>
     <div class="row" id="periodRow">
-      <button class="seg" data-period="today">今日</button>
-      <button class="seg" data-period="yesterday">昨日</button>
+      <button class="seg" data-period="today">最新</button>
+      <button class="seg" data-period="yesterday">前日</button>
       <button class="seg" data-period="7d">直近7日</button>
       <button class="seg" data-period="30d">直近30日</button>
       <button class="seg on" data-period="all">全期間</button>
@@ -131,6 +131,18 @@
     </div>
     <div id="list"></div>
   </div>
+</section>
+
+<!-- 画面4: 日別詳細 -->
+<section id="screen-day" style="display:none">
+  <header style="padding:14px 0 8px">
+    <h1 id="dayTitle">日別詳細</h1>
+    <div class="sub" id="daySub"></div>
+  </header>
+  <div class="card">
+    <div id="dayBody"></div>
+  </div>
+  <button class="ghost" id="dayBackBtn">← 戻る</button>
 </section>
 
 <script src="app.js"></script>
