@@ -1,4 +1,7 @@
-/* 差枚ビューア v2.1
+/* 差枚ビューア v2.2
+ * v2.2追加（2026-11-28）: 日別詳細にスランプグラフの再描画
+ *   （<ID>_series_all.csv の推移系列から SVG を描く。画像は保存しない）、
+ *   機種全体モード（全台合計の日別内訳＝店の出方を見る集計）。
  * 4画面構成（承認済み設計 2026-11-23、v2.1追加 2026-11-25）:
  *   1. トークン入力のみ（保存済みなら自動スキップ）。デモは廃止。
  *   2. 機種一覧: 横断No.1バナー + 機種カード（最新日のNo.1と機種合計付き）
@@ -23,6 +26,7 @@ var state = {
   machines: [],        // [{ id, name }]
   data: {},            // id -> rows [{ d, m, v }]
   details: {},         // id -> { "日付|台番号": 詳細オブジェクト }
+  series: {},          // id -> { "日付|台番号": 推移系列の文字列 }
   dayDetail: null,     // 日別詳細の対象 { m, d }
   screen: "token",     // token | list | machine
   currentId: null,
@@ -158,6 +162,76 @@ function mergeDetails(listMap, detailMap) {
   return out;
 }
 
+/* ---- 推移系列CSV解析: 取得日,台番号,推移（"0.0:0;16.2:-350;..."） ---- */
+function parseSeriesCsv(text) {
+  var t = csvTable(text);
+  var iDate = t.head.indexOf("取得日"), iMach = t.head.indexOf("台番号"), iSer = t.head.indexOf("推移");
+  var out = {};
+  if (iDate < 0 || iMach < 0 || iSer < 0) return out;
+  t.rows.forEach(function (c) {
+    var d = (c[iDate] || "").trim(), m = (c[iMach] || "").trim(), s = (c[iSer] || "").trim();
+    if (d && m && s) out[d + "|" + m] = s;
+  });
+  return out;
+}
+
+/* 機種全体の日別合計: 日付ごとに全台の差枚を合計する（友達の要望①）。
+ * 返り値は日付の新しい順。 */
+function modelDailyTotals(rows) {
+  var by = {};
+  rows.forEach(function (r) {
+    var g = by[r.d] || (by[r.d] = { d: r.d, sum: 0, count: 0 });
+    g.sum += r.v; g.count += 1;
+  });
+  return Object.keys(by).map(function (k) { return by[k]; })
+    .sort(function (a, b) { return a.d < b.d ? 1 : -1; });
+}
+
+/* 推移系列の文字列から再描画用 SVG の幾何情報を作る（340x176 の箱）。 */
+function buildGraphGeom(seriesStr) {
+  var pts = String(seriesStr).split(";").map(function (p) {
+    var kv = p.split(":");
+    return [parseFloat(kv[0]), parseInt(kv[1], 10)];
+  }).filter(function (p) { return !isNaN(p[0]) && !isNaN(p[1]); });
+  if (pts.length < 2) return null;
+  var vals = pts.map(function (p) { return p[1]; });
+  var minV = Math.min.apply(null, vals), maxV = Math.max.apply(null, vals);
+  var vmax = Math.max(0, maxV), vmin = Math.min(0, minV);
+  var range = (vmax - vmin) || 1;
+  vmax += range * 0.1; vmin -= range * 0.1;
+  var W = 340, H = 176, PL = 6, PR = 6, PT = 12, PB = 16;
+  function X(x) { return PL + x / 100 * (W - PL - PR); }
+  function Y(v) { return PT + (vmax - v) / (vmax - vmin) * (H - PT - PB); }
+  var minPt = pts[vals.indexOf(minV)];
+  var lastPt = pts[pts.length - 1];
+  return {
+    points: pts.map(function (p) { return X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1); }).join(" "),
+    zeroY: (vmin < 0 && vmax > 0) ? Y(0) : null,
+    minV: minV, maxV: maxV, finalV: lastPt[1],
+    minXY: [X(minPt[0]), Y(minPt[1])],
+    endXY: [X(lastPt[0]), Y(lastPt[1])],
+    W: W, H: H
+  };
+}
+
+function graphSvgHtml(g) {
+  var h = '<svg viewBox="0 0 ' + g.W + ' ' + g.H + '" style="width:100%;height:auto;display:block;' +
+    'background:#10151d;border-radius:8px;margin-bottom:10px">';
+  if (g.zeroY !== null) {
+    h += '<line x1="6" y1="' + g.zeroY.toFixed(1) + '" x2="' + (g.W - 6) + '" y2="' + g.zeroY.toFixed(1) +
+      '" stroke="#ff5c5c" stroke-width="1" stroke-dasharray="4 3"/>' +
+      '<text x="8" y="' + (g.zeroY - 4).toFixed(1) + '" font-size="9" fill="#ff5c5c">0</text>';
+  }
+  h += '<polyline points="' + g.points + '" fill="none" stroke="#4da3ff" stroke-width="2" stroke-linejoin="round"/>';
+  h += '<circle cx="' + g.minXY[0].toFixed(1) + '" cy="' + g.minXY[1].toFixed(1) + '" r="3" fill="#4da3ff"/>' +
+    '<text x="' + Math.max(6, g.minXY[0] - 14).toFixed(1) + '" y="' + Math.min(g.H - 3, g.minXY[1] + 13).toFixed(1) +
+    '" font-size="9" fill="#9fb0c3">底 ' + fmt(g.minV) + '</text>';
+  h += '<circle cx="' + g.endXY[0].toFixed(1) + '" cy="' + g.endXY[1].toFixed(1) + '" r="3.5" fill="#4da3ff"/>' +
+    '<text x="' + (g.endXY[0] - 44).toFixed(1) + '" y="' + Math.max(10, g.endXY[1] - 7).toFixed(1) +
+    '" font-size="9" fill="#e8eef5">終 ' + fmt(g.finalV) + '</text>';
+  return h + "</svg>";
+}
+
 /* ---- GitHub連携: Contents APIで1ファイルをテキストで読む（base64） ---- */
 function fetchRepoText(token, path) {
   return fetch(REPO_CONTENTS + path, {
@@ -189,6 +263,7 @@ function loadAll(token) {
     state.machines = machines;
     state.data = {};
     state.details = {};
+    state.series = {};
     var chain = Promise.resolve();
     var failed = [];
     machines.forEach(function (mc) {
@@ -209,6 +284,11 @@ function loadAll(token) {
             }).catch(function () {});
           }).then(function () {
             state.details[mc.id] = mergeDetails(listMap, detailMap);
+          }).then(function () {
+            // 推移系列は任意（無い機種・無い日はグラフ無しになるだけ）
+            return fetchRepoText(token, mc.id + "_series_all.csv").then(function (csv) {
+              state.series[mc.id] = parseSeriesCsv(csv);
+            }).catch(function () { state.series[mc.id] = {}; });
           });
         });
       });
@@ -425,7 +505,23 @@ function renderMachine() {
     return;
   }
 
-  if (state.mode === "total") {
+  if (state.mode === "model") {
+    var byDay = modelDailyTotals(rows);
+    var grand = byDay.reduce(function (s, x) { return s + x.sum; }, 0);
+    var plusD = byDay.filter(function (x) { return x.sum > 0; }).length;
+    hero.innerHTML = '<span class="' + (grand >= 0 ? "pos" : "neg") + '">' + fmt(grand) +
+      '<span class="unit">枚</span></span>';
+    heroSub.textContent = "機種全体・" + byDay.length + "日分（プラス " + plusD +
+      "日・平均 " + fmt(Math.round(grand / byDay.length)) + "枚/日）";
+    title.textContent = "機種全体（日別合計）";
+    var hm = '<table><tr><th>日付</th><th class="num">機種合計</th><th class="num">台数</th></tr>';
+    byDay.forEach(function (x) {
+      hm += '<tr><td>' + x.d + '</td>' +
+        '<td class="num ' + (x.sum >= 0 ? "pos" : "neg") + '">' + fmt(x.sum) + '</td>' +
+        '<td class="num">' + x.count + '</td></tr>';
+    });
+    list.innerHTML = hm + "</table><p class='muted'>その機種の全台の差枚合計です（店がその機種でどれだけ出しているか）。</p>";
+  } else if (state.mode === "total") {
     var t = sortTotals(totals(rows));
     if (state.plusZeroOnly) t = t.filter(function (g) { return g.plus === 0; });
     if (!t.length) {
@@ -497,6 +593,9 @@ function renderDay() {
   $("daySub").textContent = mc ? mc.name : "";
   var row = currentRows().filter(function (r) { return r.m === dd.m && r.d === dd.d; })[0];
   var det = (state.details[state.currentId] || {})[dd.d + "|" + dd.m] || null;
+  var ser = (state.series[state.currentId] || {})[dd.d + "|" + dd.m] || null;
+  var gh = "";
+  if (ser) { var gg = buildGraphGeom(ser); if (gg) gh = graphSvgHtml(gg); }
   function line(label, val, cls) {
     return '<tr><th style="width:40%">' + label + '</th>' +
       '<td class="num ' + (cls || "") + '">' + (val === "" || val == null ? "—" : esc(val)) + '</td></tr>';
@@ -518,7 +617,7 @@ function renderDay() {
   }
   h += "</table>";
   if (!det) h += '<p class="muted">この日のBB/RB等のデータはありません（差枚のみ）。</p>';
-  $("dayBody").innerHTML = h;
+  $("dayBody").innerHTML = gh + h;
 }
 
 function refreshMachineDate() {
@@ -612,6 +711,9 @@ if (typeof module !== "undefined") {
     parseListCsv: parseListCsv,
     parseDetailCsv: parseDetailCsv,
     mergeDetails: mergeDetails,
+    parseSeriesCsv: parseSeriesCsv,
+    modelDailyTotals: modelDailyTotals,
+    buildGraphGeom: buildGraphGeom,
     totals: totals,
     summarizeDay: summarizeDay,
     sortTotals: sortTotals,
